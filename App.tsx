@@ -17,7 +17,7 @@ import {
   PlusCircle
 } from 'lucide-react';
 import { Category, InventoryItem, Recipe, View } from './types';
-import { suggestRecipesFromInventory, chatWithChef } from './services/geminiService';
+import { suggestRecipesFromInventory, chatWithChef } from './services/claudeService';
 
 // Mock Initial Community Recipes
 const MOCK_COMMUNITY: Recipe[] = [
