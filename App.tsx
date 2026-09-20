@@ -68,8 +68,11 @@ const App: React.FC = () => {
   const [myRecipes, setMyRecipes] = useState<Recipe[]>([]);
   const [communityRecipes, setCommunityRecipes] = useState<Recipe[]>(MOCK_COMMUNITY);
   const [isAddItemModalOpen, setIsAddItemModalOpen] = useState(false);
+  const [isCreateRecipeModalOpen, setIsCreateRecipeModalOpen] = useState(false);
+  const [viewingRecipe, setViewingRecipe] = useState<Partial<Recipe> | null>(null);
   const [isChefLoading, setIsChefLoading] = useState(false);
   const [chefSuggestions, setChefSuggestions] = useState<Partial<Recipe>[]>([]);
+  const [chefError, setChefError] = useState<string | null>(null);
 
   const expiringCount = useMemo(
     () => inventory.filter(item => {
@@ -111,13 +114,27 @@ const App: React.FC = () => {
     setCommunityRecipes(prev => [updatedRecipe, ...prev]);
   };
 
+  const createRecipe = (recipe: Omit<Recipe, 'id' | 'author' | 'isPublic' | 'createdAt'>) => {
+    const newRecipe: Recipe = {
+      ...recipe,
+      id: Math.random().toString(36).substr(2, 9),
+      author: 'Tu',
+      isPublic: false,
+      createdAt: new Date().toISOString(),
+    };
+    setMyRecipes(prev => [newRecipe, ...prev]);
+    setIsCreateRecipeModalOpen(false);
+  };
+
   const handleSuggestRecipes = async () => {
     setIsChefLoading(true);
+    setChefError(null);
     try {
       const suggestions = await suggestRecipesFromInventory(inventory);
       setChefSuggestions(suggestions);
     } catch (error) {
       console.error(error);
+      setChefError('Non sono riuscito a generare ricette in questo momento. Riprova tra poco.');
     } finally {
       setIsChefLoading(false);
     }
@@ -166,6 +183,7 @@ const App: React.FC = () => {
           )}
           {activeView === 'my-recipes' && (
             <button
+              onClick={() => setIsCreateRecipeModalOpen(true)}
               aria-label="Crea nuova ricetta"
               className="bg-orange-500 hover:bg-orange-600 text-white p-3 rounded-2xl shadow-lg transition-all flex items-center gap-2"
             >
@@ -196,25 +214,27 @@ const App: React.FC = () => {
                </div>
                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                  {communityRecipes.slice(0, 3).map(recipe => (
-                   <RecipeCard key={recipe.id} recipe={recipe} />
+                   <RecipeCard key={recipe.id} recipe={recipe} onViewDetails={setViewingRecipe} />
                  ))}
                </div>
             </div>
           )}
 
           {activeView === 'chef' && (
-            <ChefView 
-              inventory={inventory} 
-              suggestions={chefSuggestions} 
-              isLoading={isChefLoading} 
-              onRegenerate={handleSuggestRecipes} 
+            <ChefView
+              inventory={inventory}
+              suggestions={chefSuggestions}
+              isLoading={isChefLoading}
+              error={chefError}
+              onRegenerate={handleSuggestRecipes}
+              onViewDetails={setViewingRecipe}
             />
           )}
 
           {activeView === 'community' && (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {communityRecipes.map(recipe => (
-                <RecipeCard key={recipe.id} recipe={recipe} isCommunity />
+                <RecipeCard key={recipe.id} recipe={recipe} isCommunity onViewDetails={setViewingRecipe} />
               ))}
             </div>
           )}
@@ -228,7 +248,7 @@ const App: React.FC = () => {
                 </div>
               ) : (
                 myRecipes.map(recipe => (
-                  <RecipeCard key={recipe.id} recipe={recipe} onPublish={publishRecipe} />
+                  <RecipeCard key={recipe.id} recipe={recipe} onPublish={publishRecipe} onViewDetails={setViewingRecipe} />
                 ))
               )}
             </div>
@@ -238,6 +258,16 @@ const App: React.FC = () => {
         {/* Add Item Modal */}
         {isAddItemModalOpen && (
           <AddItemModal onClose={() => setIsAddItemModalOpen(false)} onAdd={addItem} />
+        )}
+
+        {/* Create Recipe Modal */}
+        {isCreateRecipeModalOpen && (
+          <CreateRecipeModal onClose={() => setIsCreateRecipeModalOpen(false)} onCreate={createRecipe} />
+        )}
+
+        {/* Recipe Detail Modal */}
+        {viewingRecipe && (
+          <RecipeDetailModal recipe={viewingRecipe} onClose={() => setViewingRecipe(null)} />
         )}
       </main>
     </div>
@@ -440,7 +470,7 @@ const AddItemModal: React.FC<{ onClose: () => void, onAdd: (item: Omit<Inventory
   );
 };
 
-const RecipeCard: React.FC<{ recipe: Partial<Recipe>, isCommunity?: boolean, onPublish?: (r: Recipe) => void }> = ({ recipe, isCommunity, onPublish }) => (
+const RecipeCard: React.FC<{ recipe: Partial<Recipe>, isCommunity?: boolean, onPublish?: (r: Recipe) => void, onViewDetails?: (r: Partial<Recipe>) => void }> = ({ recipe, isCommunity, onPublish, onViewDetails }) => (
   <div className="bg-white rounded-3xl overflow-hidden border border-slate-100 shadow-sm hover:shadow-xl transition-all group flex flex-col">
     <div className="h-48 relative">
       <img
@@ -475,7 +505,11 @@ const RecipeCard: React.FC<{ recipe: Partial<Recipe>, isCommunity?: boolean, onP
             <Share2 size={14} /> Pubblica
           </button>
         )}
-        <button aria-label="Vedi dettagli ricetta" className="bg-slate-100 p-2 rounded-xl text-slate-600 hover:bg-orange-100 hover:text-orange-600 transition-colors">
+        <button
+          onClick={() => onViewDetails?.(recipe)}
+          aria-label="Vedi dettagli ricetta"
+          className="bg-slate-100 p-2 rounded-xl text-slate-600 hover:bg-orange-100 hover:text-orange-600 transition-colors"
+        >
           <ChevronRight size={18} />
         </button>
       </div>
@@ -483,23 +517,230 @@ const RecipeCard: React.FC<{ recipe: Partial<Recipe>, isCommunity?: boolean, onP
   </div>
 );
 
-const ChefView: React.FC<{ 
-  inventory: InventoryItem[], 
-  suggestions: Partial<Recipe>[], 
-  isLoading: boolean, 
-  onRegenerate: () => void 
-}> = ({ inventory, suggestions, isLoading, onRegenerate }) => {
+const RecipeDetailModal: React.FC<{ recipe: Partial<Recipe>, onClose: () => void }> = ({ recipe, onClose }) => (
+  <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
+    <div className="bg-white w-full max-w-lg rounded-3xl shadow-2xl max-h-[90vh] overflow-y-auto animate-in fade-in zoom-in duration-200">
+      <div className="h-56 relative">
+        <img
+          src={recipe.image || `https://picsum.photos/800/600?random=${recipe.id || Math.random()}`}
+          className="w-full h-full object-cover"
+          alt={recipe.title || 'Foto ricetta'}
+        />
+        <div className="absolute inset-0 recipe-card-gradient flex flex-col justify-end p-6">
+          <h3 className="text-white font-bold text-2xl drop-shadow-md">{recipe.title}</h3>
+          <div className="flex items-center gap-3 text-white/90 text-sm mt-1">
+            <span className="flex items-center gap-1"><Clock size={14}/> {recipe.prepTime}</span>
+            <span className="flex items-center gap-1"><Utensils size={14}/> {recipe.servings} porz.</span>
+          </div>
+        </div>
+        <button
+          onClick={onClose}
+          aria-label="Chiudi dettagli ricetta"
+          className="absolute top-4 right-4 bg-white/90 p-2 rounded-full hover:bg-white transition-colors"
+        >
+          <X size={20} />
+        </button>
+      </div>
+      <div className="p-6 space-y-6">
+        {recipe.description && <p className="text-slate-600">{recipe.description}</p>}
+
+        {recipe.ingredients && recipe.ingredients.length > 0 && (
+          <div>
+            <h4 className="font-bold text-slate-800 mb-2">Ingredienti</h4>
+            <ul className="space-y-1">
+              {recipe.ingredients.map((ing, i) => (
+                <li key={i} className="text-sm text-slate-600 flex justify-between border-b border-slate-100 py-1.5">
+                  <span>{ing.name}</span>
+                  <span className="text-slate-400">{ing.amount}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {recipe.instructions && recipe.instructions.length > 0 && (
+          <div>
+            <h4 className="font-bold text-slate-800 mb-2">Preparazione</h4>
+            <ol className="space-y-3">
+              {recipe.instructions.map((step, i) => (
+                <li key={i} className="flex gap-3 text-sm text-slate-600">
+                  <span className="flex-shrink-0 w-6 h-6 rounded-full bg-orange-100 text-orange-600 font-bold text-xs flex items-center justify-center">{i + 1}</span>
+                  <span className="pt-0.5">{step}</span>
+                </li>
+              ))}
+            </ol>
+          </div>
+        )}
+      </div>
+    </div>
+  </div>
+);
+
+const CreateRecipeModal: React.FC<{ onClose: () => void, onCreate: (recipe: Omit<Recipe, 'id' | 'author' | 'isPublic' | 'createdAt'>) => void }> = ({ onClose, onCreate }) => {
+  const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
+  const [prepTime, setPrepTime] = useState('');
+  const [servings, setServings] = useState(2);
+  const [ingredients, setIngredients] = useState<{ name: string, amount: string }[]>([{ name: '', amount: '' }]);
+  const [instructions, setInstructions] = useState<string[]>(['']);
+
+  const updateIngredient = (idx: number, field: 'name' | 'amount', value: string) => {
+    setIngredients(prev => prev.map((ing, i) => i === idx ? { ...ing, [field]: value } : ing));
+  };
+
+  const updateInstruction = (idx: number, value: string) => {
+    setInstructions(prev => prev.map((step, i) => i === idx ? value : step));
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    onCreate({
+      title,
+      description,
+      prepTime,
+      servings,
+      ingredients: ingredients.filter(ing => ing.name.trim()),
+      instructions: instructions.filter(step => step.trim()),
+    });
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
+      <div className="bg-white w-full max-w-lg rounded-3xl p-6 shadow-2xl max-h-[90vh] overflow-y-auto animate-in fade-in zoom-in duration-200">
+        <div className="flex justify-between items-center mb-6">
+          <h3 className="text-xl font-bold">Crea Ricetta</h3>
+          <button onClick={onClose} aria-label="Chiudi" className="p-2 hover:bg-slate-100 rounded-full">
+            <X size={24} />
+          </button>
+        </div>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="block text-sm font-bold text-slate-700 mb-1">Titolo</label>
+            <input
+              autoFocus
+              required
+              className="w-full bg-slate-50 border border-slate-200 p-3 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none"
+              placeholder="es. Pasta al pomodoro"
+              value={title}
+              onChange={e => setTitle(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-bold text-slate-700 mb-1">Descrizione</label>
+            <textarea
+              className="w-full bg-slate-50 border border-slate-200 p-3 rounded-xl outline-none resize-none"
+              rows={2}
+              placeholder="Una breve descrizione del piatto"
+              value={description}
+              onChange={e => setDescription(e.target.value)}
+            />
+          </div>
+          <div className="flex gap-4">
+            <div className="flex-1">
+              <label className="block text-sm font-bold text-slate-700 mb-1">Tempo di preparazione</label>
+              <input
+                className="w-full bg-slate-50 border border-slate-200 p-3 rounded-xl outline-none"
+                placeholder="es. 20 min"
+                value={prepTime}
+                onChange={e => setPrepTime(e.target.value)}
+              />
+            </div>
+            <div className="flex-1">
+              <label className="block text-sm font-bold text-slate-700 mb-1">Porzioni</label>
+              <input
+                type="number"
+                min={1}
+                className="w-full bg-slate-50 border border-slate-200 p-3 rounded-xl outline-none"
+                value={servings}
+                onChange={e => setServings(Number(e.target.value))}
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-bold text-slate-700 mb-1">Ingredienti</label>
+            <div className="space-y-2">
+              {ingredients.map((ing, i) => (
+                <div key={i} className="flex gap-2">
+                  <input
+                    className="flex-1 bg-slate-50 border border-slate-200 p-2 rounded-xl outline-none text-sm"
+                    placeholder="Nome"
+                    value={ing.name}
+                    onChange={e => updateIngredient(i, 'name', e.target.value)}
+                  />
+                  <input
+                    className="w-24 bg-slate-50 border border-slate-200 p-2 rounded-xl outline-none text-sm"
+                    placeholder="Quantità"
+                    value={ing.amount}
+                    onChange={e => updateIngredient(i, 'amount', e.target.value)}
+                  />
+                </div>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={() => setIngredients(prev => [...prev, { name: '', amount: '' }])}
+              className="text-orange-500 text-xs font-bold mt-2 hover:underline"
+            >
+              + Aggiungi ingrediente
+            </button>
+          </div>
+
+          <div>
+            <label className="block text-sm font-bold text-slate-700 mb-1">Preparazione</label>
+            <div className="space-y-2">
+              {instructions.map((step, i) => (
+                <input
+                  key={i}
+                  className="w-full bg-slate-50 border border-slate-200 p-2 rounded-xl outline-none text-sm"
+                  placeholder={`Passo ${i + 1}`}
+                  value={step}
+                  onChange={e => updateInstruction(i, e.target.value)}
+                />
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={() => setInstructions(prev => [...prev, ''])}
+              className="text-orange-500 text-xs font-bold mt-2 hover:underline"
+            >
+              + Aggiungi passo
+            </button>
+          </div>
+
+          <button
+            type="submit"
+            className="w-full bg-orange-500 text-white font-bold py-4 rounded-xl shadow-lg hover:bg-orange-600 transition-colors mt-4"
+          >
+            Salva Ricetta
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+};
+
+const ChefView: React.FC<{
+  inventory: InventoryItem[],
+  suggestions: Partial<Recipe>[],
+  isLoading: boolean,
+  error: string | null,
+  onRegenerate: () => void,
+  onViewDetails: (r: Partial<Recipe>) => void
+}> = ({ inventory, suggestions, isLoading, error, onRegenerate, onViewDetails }) => {
   const [chatHistory, setChatHistory] = useState<{role: 'user'|'model', text: string}[]>([]);
   const [input, setInput] = useState('');
   const [isChatting, setIsChatting] = useState(false);
+  const [chatError, setChatError] = useState<string | null>(null);
 
   const sendMessage = async () => {
-    if (!input.trim()) return;
+    if (!input.trim() || isChatting) return;
     const userMsg = input;
     setInput('');
+    setChatError(null);
     setChatHistory(prev => [...prev, { role: 'user', text: userMsg }]);
     setIsChatting(true);
-    
+
     try {
       const response = await chatWithChef(chatHistory, userMsg, inventory);
       if (response) {
@@ -507,6 +748,7 @@ const ChefView: React.FC<{
       }
     } catch (e) {
       console.error(e);
+      setChatError('Lo chef non è riuscito a risponderti. Riprova tra poco.');
     } finally {
       setIsChatting(false);
     }
@@ -521,7 +763,7 @@ const ChefView: React.FC<{
             <Sparkles className="text-orange-500" size={24} />
             Ricette Suggerite
           </h3>
-          <button 
+          <button
             onClick={onRegenerate}
             disabled={isLoading}
             className="text-sm font-bold text-orange-600 hover:underline disabled:opacity-50"
@@ -529,6 +771,12 @@ const ChefView: React.FC<{
             {isLoading ? 'Analizzando...' : 'Rigenera'}
           </button>
         </div>
+
+        {error && (
+          <div className="bg-red-50 text-red-700 text-sm p-4 rounded-xl mb-4">
+            {error}
+          </div>
+        )}
 
         {isLoading ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -539,7 +787,7 @@ const ChefView: React.FC<{
         ) : suggestions.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {suggestions.map((recipe, idx) => (
-              <RecipeCard key={idx} recipe={recipe} />
+              <RecipeCard key={idx} recipe={recipe} onViewDetails={onViewDetails} />
             ))}
           </div>
         ) : (
@@ -578,11 +826,17 @@ const ChefView: React.FC<{
               </div>
             </div>
           )}
+          {chatError && (
+            <div className="bg-red-50 text-red-700 text-sm p-3 rounded-xl">
+              {chatError}
+            </div>
+          )}
         </div>
         <div className="p-4 bg-slate-50 border-t border-slate-100 flex gap-2">
           <input
             aria-label="Scrivi un messaggio allo chef"
-            className="flex-1 bg-white border border-slate-200 p-3 rounded-xl outline-none focus:ring-2 focus:ring-orange-500 transition-all"
+            disabled={isChatting}
+            className="flex-1 bg-white border border-slate-200 p-3 rounded-xl outline-none focus:ring-2 focus:ring-orange-500 transition-all disabled:opacity-50"
             placeholder="Chiedi una variante, un consiglio tecnico o un menù..."
             value={input}
             onChange={e => setInput(e.target.value)}
@@ -590,8 +844,9 @@ const ChefView: React.FC<{
           />
           <button
             onClick={sendMessage}
+            disabled={isChatting}
             aria-label="Invia messaggio"
-            className="bg-orange-500 text-white p-3 rounded-xl hover:bg-orange-600 transition-colors"
+            className="bg-orange-500 text-white p-3 rounded-xl hover:bg-orange-600 transition-colors disabled:opacity-50"
           >
             <ChevronRight size={20} />
           </button>

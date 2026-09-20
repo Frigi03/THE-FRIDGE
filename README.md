@@ -18,3 +18,16 @@ View your app in AI Studio: https://ai.studio/apps/temp/1
 2. Set the `ANTHROPIC_API_KEY` in [.env.local](.env.local) to your Anthropic API key
 3. Run the app:
    `npm run dev`
+
+## ⚠️ Before deploying this publicly
+
+The Anthropic API key is currently baked into the client-side JS bundle
+(`vite.config.ts` + `dangerouslyAllowBrowser: true` in `services/claudeService.ts`).
+This is fine for local development, but **anyone who opens the deployed
+site's devtools can extract the key and use it at your expense**, with no
+rate limiting.
+
+Before putting this online, move the Anthropic calls behind a small
+serverless backend (e.g. a Vercel/Cloudflare function) that holds the key
+server-side and proxies requests from the client. Do not deploy the
+current build with a real key set.
