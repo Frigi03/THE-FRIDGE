@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { 
   Plus, 
   Search, 
@@ -14,10 +14,14 @@ import {
   Clock,
   Sparkles,
   X,
-  PlusCircle
+  PlusCircle,
+  Camera
 } from 'lucide-react';
 import { Category, InventoryItem, Recipe, View } from './types';
-import { suggestRecipesFromInventory, chatWithChef } from './services/claudeService';
+import { suggestRecipesFromInventory, chatWithChef, identifyProductFromImage } from './services/claudeService';
+import { getExpiryStatus, formatExpiryLabel, compareByExpiry } from './utils/expiry';
+import { groupByCategory } from './utils/inventory';
+import CameraCapture from './components/CameraCapture';
 
 // Mock Initial Community Recipes
 const MOCK_COMMUNITY: Recipe[] = [
@@ -66,7 +70,15 @@ const App: React.FC = () => {
   const [isAddItemModalOpen, setIsAddItemModalOpen] = useState(false);
   const [isChefLoading, setIsChefLoading] = useState(false);
   const [chefSuggestions, setChefSuggestions] = useState<Partial<Recipe>[]>([]);
-  
+
+  const expiringCount = useMemo(
+    () => inventory.filter(item => {
+      const status = getExpiryStatus(item.expiryDate);
+      return status === 'expired' || status === 'soon';
+    }).length,
+    [inventory]
+  );
+
   // Loading & LocalStorage
   useEffect(() => {
     const savedInventory = localStorage.getItem('gusto_inventory');
@@ -134,13 +146,18 @@ const App: React.FC = () => {
               {activeView === 'my-recipes' && 'Ricettario Personale'}
             </h1>
             <p className="text-slate-500 mt-1">
-              {activeView === 'inventory' && `${inventory.length} prodotti in inventario`}
+              {activeView === 'inventory' && (
+                expiringCount > 0
+                  ? `${inventory.length} prodotti · ${expiringCount} in scadenza`
+                  : `${inventory.length} prodotti in inventario`
+              )}
               {activeView === 'chef' && 'Suggerimenti basati su ciò che hai'}
             </p>
           </div>
           {activeView === 'inventory' && (
-            <button 
+            <button
               onClick={() => setIsAddItemModalOpen(true)}
+              aria-label="Aggiungi prodotto"
               className="bg-orange-500 hover:bg-orange-600 text-white p-3 rounded-2xl shadow-lg transition-all flex items-center gap-2"
             >
               <Plus size={20} />
@@ -148,7 +165,8 @@ const App: React.FC = () => {
             </button>
           )}
           {activeView === 'my-recipes' && (
-            <button 
+            <button
+              aria-label="Crea nuova ricetta"
               className="bg-orange-500 hover:bg-orange-600 text-white p-3 rounded-2xl shadow-lg transition-all flex items-center gap-2"
             >
               <PlusCircle size={20} />
@@ -249,13 +267,7 @@ const InventoryGrid: React.FC<{ inventory: InventoryItem[], onRemove: (id: strin
     );
   }
 
-  // Use a Record with string keys for easier inference by Object.entries to avoid 'unknown' type errors.
-  const grouped = inventory.reduce((acc, item) => {
-    const categoryName = item.category as string;
-    if (!acc[categoryName]) acc[categoryName] = [];
-    acc[categoryName].push(item);
-    return acc;
-  }, {} as Record<string, InventoryItem[]>);
+  const grouped = groupByCategory(inventory);
 
   return (
     <div className="space-y-8">
@@ -267,20 +279,33 @@ const InventoryGrid: React.FC<{ inventory: InventoryItem[], onRemove: (id: strin
           </h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {/* Explicitly cast items to InventoryItem[] to ensure .map is available and correctly typed. */}
-            {(items as InventoryItem[]).map(item => (
-              <div key={item.id} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex justify-between items-center group hover:shadow-md transition-all">
-                <div>
-                  <h4 className="font-semibold text-slate-800">{item.name}</h4>
-                  <p className="text-sm text-slate-500">{item.quantity} {item.unit}</p>
+            {(items as InventoryItem[]).slice().sort(compareByExpiry).map(item => {
+              const status = getExpiryStatus(item.expiryDate);
+              return (
+                <div key={item.id} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex justify-between items-center group hover:shadow-md transition-all">
+                  <div>
+                    <h4 className="font-semibold text-slate-800">{item.name}</h4>
+                    <p className="text-sm text-slate-500">{item.quantity} {item.unit}</p>
+                    {item.expiryDate && (
+                      <span className={`inline-block mt-1 text-[11px] font-bold px-2 py-0.5 rounded-full ${
+                        status === 'expired' ? 'bg-red-100 text-red-700' :
+                        status === 'soon' ? 'bg-amber-100 text-amber-700' :
+                        'bg-slate-100 text-slate-500'
+                      }`}>
+                        {formatExpiryLabel(item.expiryDate)}
+                      </span>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => onRemove(item.id)}
+                    aria-label={`Rimuovi ${item.name} dalla dispensa`}
+                    className="text-slate-300 hover:text-red-500 p-2 opacity-0 group-hover:opacity-100 transition-opacity"
+                  >
+                    <Trash2 size={18} />
+                  </button>
                 </div>
-                <button 
-                  onClick={() => onRemove(item.id)}
-                  className="text-slate-300 hover:text-red-500 p-2 opacity-0 group-hover:opacity-100 transition-opacity"
-                >
-                  <Trash2 size={18} />
-                </button>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </section>
       ))}
@@ -293,23 +318,65 @@ const AddItemModal: React.FC<{ onClose: () => void, onAdd: (item: Omit<Inventory
   const [quantity, setQuantity] = useState(1);
   const [unit, setUnit] = useState('pz');
   const [category, setCategory] = useState<Category>(Category.PANTRY);
+  const [expiryDate, setExpiryDate] = useState('');
+  const [isCameraOpen, setIsCameraOpen] = useState(false);
+  const [isScanning, setIsScanning] = useState(false);
+  const [scanError, setScanError] = useState<string | null>(null);
+
+  const handleCapture = async (base64: string, mediaType: string) => {
+    setIsScanning(true);
+    setScanError(null);
+    try {
+      const result = await identifyProductFromImage(base64, mediaType);
+      if (!result) {
+        setScanError('Non sono riuscito a riconoscere il prodotto. Riprova o inseriscilo manualmente.');
+        return;
+      }
+      setName(result.name);
+      setCategory(result.category);
+      setUnit(result.unit);
+      setQuantity(result.quantity);
+      setIsCameraOpen(false);
+    } catch (e) {
+      console.error(e);
+      setScanError('Errore durante il riconoscimento. Riprova o inseriscilo manualmente.');
+    } finally {
+      setIsScanning(false);
+    }
+  };
 
   return (
     <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
       <div className="bg-white w-full max-w-md rounded-3xl p-6 shadow-2xl animate-in fade-in zoom-in duration-200">
         <div className="flex justify-between items-center mb-6">
           <h3 className="text-xl font-bold">Aggiungi Prodotto</h3>
-          <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-full">
+          <button onClick={onClose} aria-label="Chiudi" className="p-2 hover:bg-slate-100 rounded-full">
             <X size={24} />
           </button>
         </div>
-        <form onSubmit={(e) => { e.preventDefault(); onAdd({ name, quantity, unit, category }); }} className="space-y-4">
+        <button
+          type="button"
+          onClick={() => { setScanError(null); setIsCameraOpen(true); }}
+          className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2 mb-4"
+        >
+          <Camera size={18} />
+          Scansiona con Fotocamera
+        </button>
+        {isCameraOpen && (
+          <CameraCapture
+            onClose={() => setIsCameraOpen(false)}
+            onCapture={handleCapture}
+            isProcessing={isScanning}
+            error={scanError}
+          />
+        )}
+        <form onSubmit={(e) => { e.preventDefault(); onAdd({ name, quantity, unit, category, expiryDate: expiryDate || undefined }); }} className="space-y-4">
           <div>
             <label className="block text-sm font-bold text-slate-700 mb-1">Nome Prodotto</label>
-            <input 
+            <input
               autoFocus
               required
-              className="w-full bg-slate-50 border border-slate-200 p-3 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none" 
+              className="w-full bg-slate-50 border border-slate-200 p-3 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none"
               placeholder="es. Pasta, Latte, Sale..."
               value={name}
               onChange={e => setName(e.target.value)}
@@ -342,7 +409,7 @@ const AddItemModal: React.FC<{ onClose: () => void, onAdd: (item: Omit<Inventory
           </div>
           <div>
             <label className="block text-sm font-bold text-slate-700 mb-1">Categoria</label>
-            <select 
+            <select
               className="w-full bg-slate-50 border border-slate-200 p-3 rounded-xl outline-none"
               value={category}
               onChange={e => setCategory(e.target.value as Category)}
@@ -352,7 +419,16 @@ const AddItemModal: React.FC<{ onClose: () => void, onAdd: (item: Omit<Inventory
               ))}
             </select>
           </div>
-          <button 
+          <div>
+            <label className="block text-sm font-bold text-slate-700 mb-1">Data di scadenza (opzionale)</label>
+            <input
+              type="date"
+              className="w-full bg-slate-50 border border-slate-200 p-3 rounded-xl outline-none"
+              value={expiryDate}
+              onChange={e => setExpiryDate(e.target.value)}
+            />
+          </div>
+          <button
             type="submit"
             className="w-full bg-orange-500 text-white font-bold py-4 rounded-xl shadow-lg hover:bg-orange-600 transition-colors mt-4"
           >
@@ -367,10 +443,10 @@ const AddItemModal: React.FC<{ onClose: () => void, onAdd: (item: Omit<Inventory
 const RecipeCard: React.FC<{ recipe: Partial<Recipe>, isCommunity?: boolean, onPublish?: (r: Recipe) => void }> = ({ recipe, isCommunity, onPublish }) => (
   <div className="bg-white rounded-3xl overflow-hidden border border-slate-100 shadow-sm hover:shadow-xl transition-all group flex flex-col">
     <div className="h-48 relative">
-      <img 
-        src={recipe.image || `https://picsum.photos/800/600?random=${recipe.id || Math.random()}`} 
-        className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" 
-        alt={recipe.title} 
+      <img
+        src={recipe.image || `https://picsum.photos/800/600?random=${recipe.id || Math.random()}`}
+        className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
+        alt={recipe.title || 'Foto ricetta'}
       />
       <div className="absolute inset-0 recipe-card-gradient flex flex-col justify-end p-4">
         <h4 className="text-white font-bold text-xl drop-shadow-md">{recipe.title}</h4>
@@ -399,7 +475,7 @@ const RecipeCard: React.FC<{ recipe: Partial<Recipe>, isCommunity?: boolean, onP
             <Share2 size={14} /> Pubblica
           </button>
         )}
-        <button className="bg-slate-100 p-2 rounded-xl text-slate-600 hover:bg-orange-100 hover:text-orange-600 transition-colors">
+        <button aria-label="Vedi dettagli ricetta" className="bg-slate-100 p-2 rounded-xl text-slate-600 hover:bg-orange-100 hover:text-orange-600 transition-colors">
           <ChevronRight size={18} />
         </button>
       </div>
@@ -504,15 +580,17 @@ const ChefView: React.FC<{
           )}
         </div>
         <div className="p-4 bg-slate-50 border-t border-slate-100 flex gap-2">
-          <input 
+          <input
+            aria-label="Scrivi un messaggio allo chef"
             className="flex-1 bg-white border border-slate-200 p-3 rounded-xl outline-none focus:ring-2 focus:ring-orange-500 transition-all"
             placeholder="Chiedi una variante, un consiglio tecnico o un menù..."
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && sendMessage()}
           />
-          <button 
+          <button
             onClick={sendMessage}
+            aria-label="Invia messaggio"
             className="bg-orange-500 text-white p-3 rounded-xl hover:bg-orange-600 transition-colors"
           >
             <ChevronRight size={20} />

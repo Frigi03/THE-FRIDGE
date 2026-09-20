@@ -1,6 +1,6 @@
 
 import Anthropic from "@anthropic-ai/sdk";
-import { InventoryItem, Recipe } from "../types";
+import { Category, InventoryItem, Recipe } from "../types";
 
 const MODEL = "claude-sonnet-5";
 
@@ -97,4 +97,65 @@ export const chatWithChef = async (history: {role: 'user'|'model', text: string}
 
   const textBlock = response.content.find(block => block.type === "text");
   return textBlock && textBlock.type === "text" ? textBlock.text : "";
+};
+
+export interface IdentifiedProduct {
+  name: string;
+  category: Category;
+  unit: string;
+  quantity: number;
+}
+
+const IDENTIFY_TOOL = {
+  name: "identify_product",
+  description: "Registra il prodotto alimentare riconosciuto nella foto.",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      name: { type: "string", description: "Nome del prodotto, es. 'Latte intero'" },
+      category: { type: "string", enum: Object.values(Category) },
+      unit: { type: "string", description: "Unità di misura plausibile: pz, kg, g, L, ml" },
+      quantity: { type: "number", description: "Quantità stimata visibile nella foto, minimo 1" },
+    },
+    required: ["name", "category", "unit", "quantity"],
+  },
+};
+
+export const identifyProductFromImage = async (base64Image: string, mediaType: string): Promise<IdentifiedProduct | null> => {
+  const client = getClient();
+
+  const response = await client.messages.create({
+    model: MODEL,
+    max_tokens: 512,
+    messages: [
+      {
+        role: "user",
+        content: [
+          {
+            type: "image",
+            source: { type: "base64", media_type: mediaType as "image/jpeg" | "image/png" | "image/webp" | "image/gif", data: base64Image },
+          },
+          {
+            type: "text",
+            text: "Identifica il prodotto alimentare in questa foto e registralo con il tool.",
+          },
+        ],
+      },
+    ],
+    tools: [IDENTIFY_TOOL],
+    tool_choice: { type: "tool", name: "identify_product" },
+  });
+
+  const toolUse = response.content.find(block => block.type === "tool_use");
+  if (!toolUse || toolUse.type !== "tool_use") return null;
+
+  const input = toolUse.input as Partial<IdentifiedProduct>;
+  if (!input.name || !input.category) return null;
+
+  return {
+    name: input.name,
+    category: input.category,
+    unit: input.unit || "pz",
+    quantity: input.quantity && input.quantity > 0 ? input.quantity : 1,
+  };
 };
