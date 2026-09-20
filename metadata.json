@@ -1,0 +1,8 @@
+
+{
+  "name": "Gusto - Il Tuo Chef Intelligente",
+  "description": "Un'applicazione completa per gestire il tuo inventario di cibo, scoprire ricette basate su ciò che hai in dispensa e condividere le tue creazioni culinarie con la community.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
